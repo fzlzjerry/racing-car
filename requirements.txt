@@ -1,0 +1,48 @@
+# ============================================================================
+# Validated lockfile (Python 3.11, headless Linux). Every version here was
+# smoke-tested together; the pins matter -- see SETUP.md for the why.
+#
+#   * numpy is pinned <1.24 because racecar_gym uses the removed np.float /
+#     np.int aliases in its nptyping annotations (evaluated at import).
+#   * pandas / matplotlib / contourpy are pinned to their last numpy-1.23-
+#     compatible releases (newer ones force numpy>=1.25 and break the sim).
+#   * gymnasium==0.28.1 is what BOTH racecar_gym AND stable-baselines3==2.0.0
+#     target -> a clean match with no shim.
+#   * setuptools<80 keeps pkg_resources available for imageio-ffmpeg.
+#
+# torch is intentionally NOT pinned here -- install the right build first:
+#   CPU:   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   CUDA:  (Colab usually preinstalls a CUDA torch; otherwise see SETUP.md)
+#
+# racecar_gym is installed separately (git + py3.11 patch + --no-deps) via
+#   python scripts/install_racecar_gym.py
+# ============================================================================
+
+# --- scientific core (numpy<1.24 era) ---
+numpy==1.23.5
+scipy==1.10.1
+pandas==2.0.3
+matplotlib==3.7.5
+contourpy==1.1.1
+setuptools<80
+
+# --- simulator stack (matches racecar_gym @ 7049676) ---
+gymnasium==0.28.1
+pybullet==3.2.5
+pettingzoo==1.22.3
+yamldataclassconfig==1.5.0
+nptyping<2.0
+
+# --- RL ---
+stable-baselines3==2.0.0
+# Optional JAX "fast mode" (see SETUP.md). Uncomment + install jax separately:
+# sbx-rl==0.12.0
+
+# --- logging / config / rendering ---
+tensorboard==2.15.1
+omegaconf==2.3.0
+imageio==2.34.0
+imageio-ffmpeg==0.4.9
+psutil
+rich
+tqdm

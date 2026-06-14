@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.venv-racing/
+
+# Training artifacts (checkpoints / logs / replay buffers / videos are big)
+checkpoints/
+tb_logs/
+runs/
+outputs/
+*.zip
+*.pkl
+*.mp4
+*.gif
+*.png
+!docs/**/*.png
+
+# Generated per-stage scenarios
+_scenarios/
+
+# racecar_gym downloaded track meshes (if cloned into the tree)
+models/scenes/*/
+racecar_gym_src/
+
+# OS / editor
+.DS_Store
+.ipynb_checkpoints/
+*.swp

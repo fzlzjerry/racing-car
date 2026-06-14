@@ -1,0 +1,155 @@
+# ============================================================================
+# Default configuration for the self-play RL racing project.
+# Loaded with OmegaConf; override any field from the CLI with dotlist syntax,
+# e.g.   python train.py experiment.seed=1 agent.batch_size=1024
+# or layer another YAML on top with  --config configs/smoke.yaml
+# ============================================================================
+
+experiment:
+  name: racing_sac_selfplay
+  seed: 0
+  total_steps: 50_000_000      # global budget across all curriculum stages
+
+# ---------------------------------------------------------------------------
+# Environment / simulator
+# ---------------------------------------------------------------------------
+env:
+  backend: racecar_gym         # sim adapter (only racecar_gym implemented; f1tenth = stub)
+  track: circle_cw             # circle_cw (small) | austria | montreal | berlin | torino | ...
+  n_envs: 8                    # parallel SubprocVecEnvs (auto-scaled to CPU count)
+  max_episode_steps: 2000      # truncation horizon
+  action_repeat: 1             # frame-skip (>=1)
+  laps: 2                      # laps before an episode terminates (finish)
+  time_limit: 120.0            # sim-seconds before truncation
+  scenario_dir: ${checkpoint.dir}/_scenarios   # generated per-stage scenario ymls live here
+
+# ---------------------------------------------------------------------------
+# Observation construction (Dict sensor obs -> flat Box vector)
+# ---------------------------------------------------------------------------
+obs:
+  lidar_beams: 108             # subsample from the raw 1080 beams (keeps replay buffer small)
+  lidar_max_range: 15.0        # for normalization to [0, 1]
+  include: [lidar, velocity, last_action]   # any of: lidar, velocity, pose, acceleration, progress, last_action
+  max_linear_velocity: 14.0    # normalization constants (match racecar.yml sensor bounds)
+  max_angular_velocity: 6.0
+
+# ---------------------------------------------------------------------------
+# Reward shaping (all weights tunable). reward = sum of weighted terms.
+# ---------------------------------------------------------------------------
+reward:
+  progress: 100.0              # * delta-progress along the centerline (handles lap wrap)
+  speed: 0.10                  # * forward speed (normalized [0,1])
+  collision: 5.0              # penalty subtracted on wall OR opponent collision
+  wrong_way: 1.0              # penalty subtracted while wrong_way is True
+  reverse: 1.0                # penalty subtracted while moving backwards
+  time_penalty: 0.01          # subtracted every step (encourages finishing fast)
+  action_smoothness: 0.01     # * ||a_t - a_{t-1}||^2 (subtracted)
+  overtake: 3.0               # bonus added when rank improves (self-play)
+  finish: 25.0                # bonus * (N - rank + 1) on lap completion
+  progress_wrap_threshold: 0.5  # delta below -threshold => treat as a lap wrap (+1)
+
+# ---------------------------------------------------------------------------
+# Agent / SAC. Defaults are deliberately modest; hardware.auto_scale grows
+# net/batch/buffer/UTD when a GPU is detected (see training/autoscale.py).
+# ---------------------------------------------------------------------------
+agent:
+  backend: sb3                 # sb3 (PyTorch, default/robust) | sbx (JAX, fast mode)
+  algo: sac                    # sb3: sac ; sbx: sac | crossq | tqc | droq
+  policy: MlpPolicy
+  net_arch: [256, 256]
+  learning_rate: 3.0e-4
+  batch_size: 256
+  buffer_size: 300_000
+  learning_starts: 5_000
+  train_freq: 64               # env steps between gradient phases
+  gradient_steps: 64           # gradient steps per phase == update-to-data ratio knob
+  tau: 0.005
+  gamma: 0.99
+  ent_coef: auto
+  target_entropy: auto
+  use_sde: false
+  optimize_memory_usage: false # set true for very large buffers (drops next_obs copy)
+  # sbx-only knobs (ignored by sb3):
+  dropout_rate: 0.01           # droq
+  layer_norm: true             # droq / crossq
+  policy_delay: 1
+  qf_learning_rate: 1.0e-3
+
+# ---------------------------------------------------------------------------
+# Three-stage curriculum
+# ---------------------------------------------------------------------------
+curriculum:
+  enabled: true
+  advance_on: steps            # steps | performance
+  performance_metric: laps_completed_frac
+  performance_threshold: 0.8
+  stages:
+    - name: time_trial         # 1) learn the racing line, minimize lap time
+      num_agents: 1
+      steps: 5_000_000
+      opponents_from_league: false
+    - name: head_to_head       # 2) race a frozen past self -> overtaking / defending
+      num_agents: 2
+      steps: 15_000_000
+      opponents_from_league: true
+    - name: full_grid          # 3) full grid of sampled opponents
+      num_agents: 6
+      steps: 30_000_000
+      opponents_from_league: true
+
+# ---------------------------------------------------------------------------
+# Self-play league (AlphaStar-lite / PFSP)
+# ---------------------------------------------------------------------------
+league:
+  enabled: true
+  snapshot_every: 100_000      # global steps between freezing a new league member
+  max_size: 40                 # cap; evict oldest beyond this
+  sample: pfsp                 # pfsp | uniform | latest
+  latest_fraction: 0.3         # P(opponent = latest snapshot) before PFSP over the rest
+  pfsp_temperature: 1.0        # weight ∝ (1 - winrate)^? ; see agents/league.py
+  opponent_device: cpu         # run frozen-opponent inference on CPU (keep GPU for the learner)
+
+# ---------------------------------------------------------------------------
+# Hardware / auto-scaling
+# ---------------------------------------------------------------------------
+hardware:
+  device: auto                 # auto | cpu | cuda
+  auto_scale: true             # scale net/batch/buffer/n_envs/UTD to detected VRAM
+  # VRAM (GiB) -> multipliers; the largest profile <= detected VRAM is used.
+  vram_profiles:
+    0:   {net_arch: [256, 256],        batch_size: 256,  buffer_size: 300_000,   gradient_steps: 64,  n_envs: 8}
+    16:  {net_arch: [512, 512],        batch_size: 1024, buffer_size: 1_000_000, gradient_steps: 128, n_envs: 16}
+    40:  {net_arch: [1024, 1024],      batch_size: 2048, buffer_size: 2_000_000, gradient_steps: 256, n_envs: 32}
+    80:  {net_arch: [1024, 1024, 1024],batch_size: 4096, buffer_size: 3_000_000, gradient_steps: 512, n_envs: 48}
+    90:  {net_arch: [2048, 2048, 1024],batch_size: 8192, buffer_size: 4_000_000, gradient_steps: 768, n_envs: 64}
+
+# ---------------------------------------------------------------------------
+# Checkpointing (resumability) -- point .dir at a mounted Drive folder on Colab
+# ---------------------------------------------------------------------------
+checkpoint:
+  dir: ./checkpoints
+  save_every: 20_000           # global steps between (model + rng + vecnormalize) saves
+  buffer_every: 100_000        # global steps between replay-buffer saves (big file, rarer)
+  keep_last: 5                 # rotation: keep this many recent checkpoints
+  save_replay_buffer: true
+  save_vecnormalize: true
+
+# ---------------------------------------------------------------------------
+# Logging / eval -- point .tb_dir at Drive on Colab
+# ---------------------------------------------------------------------------
+logging:
+  tb_dir: ./tb_logs
+  log_interval: 10
+  eval_every: 50_000           # global steps between eval rollouts
+  eval_episodes: 5
+  vecnormalize: true           # normalize observations with a running mean/std
+
+# ---------------------------------------------------------------------------
+# Rendering (render.py)
+# ---------------------------------------------------------------------------
+render:
+  width: 640
+  height: 480
+  fps: 30
+  max_steps: 1500
+  format: mp4                  # mp4 | gif
