@@ -1,0 +1,60 @@
+# Tiny end-to-end smoke configuration: a few hundred CPU steps that exercise the
+# whole loop (env -> SAC -> self-play -> league snapshot -> checkpoint -> resume
+# -> render).  NOT a real training config -- everything here is shrunk for speed.
+experiment:
+  name: smoke
+  seed: 0
+
+env:
+  track: circle_cw
+  n_envs: 2
+  max_episode_steps: 80
+  laps: 1
+  time_limit: 30.0
+
+obs:
+  lidar_beams: 54
+
+agent:
+  backend: sb3
+  algo: sac
+  net_arch: [64, 64]
+  learning_starts: 64
+  batch_size: 64
+  buffer_size: 4000
+  train_freq: 16
+  gradient_steps: 16
+
+curriculum:
+  enabled: true
+  stages:
+    - {name: time_trial,   num_agents: 1, steps: 300, opponents_from_league: false}
+    - {name: head_to_head, num_agents: 2, steps: 300, opponents_from_league: true}
+
+league:
+  enabled: true
+  snapshot_every: 150
+  max_size: 5
+  latest_fraction: 0.5
+
+hardware:
+  device: cpu
+  auto_scale: false
+
+checkpoint:
+  dir: /tmp/smoke_run/checkpoints
+  save_every: 150
+  buffer_every: 150
+  keep_last: 3
+
+logging:
+  tb_dir: /tmp/smoke_run/tb
+  log_interval: 1
+  eval_every: 100000      # skip periodic eval during the smoke run (eval.py covers it)
+  eval_episodes: 1
+
+render:
+  width: 320
+  height: 240
+  fps: 20
+  max_steps: 60
